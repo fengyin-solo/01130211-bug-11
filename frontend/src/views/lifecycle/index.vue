@@ -24,23 +24,51 @@
           <template #header>
             <div class="card-header">
               <span>全生命周期时间线</span>
-              <el-tag type="info">当前阶段: {{ currentStage?.name }}</el-tag>
+              <el-tag type="info">当前阶段: {{ currentStage?.name || '-' }}</el-tag>
             </div>
           </template>
-          <div class="timeline-container">
-            <div class="timeline-track">
-              <div class="timeline-progress" :style="{ width: `${progressPercentage}%` }"></div>
-              <div v-for="(stage, index) in lifecycleStages" :key="stage.id" class="timeline-node" :class="{ active: stage.status === 'completed', current: stage.status === 'in_progress' }" @click="selectStage(stage)">
-                <div class="node-icon">
-                  <el-icon v-if="stage.status === 'completed'" size="20"><CircleCheck /></el-icon>
-                  <el-icon v-else-if="stage.status === 'in_progress'" size="20"><Loading /></el-icon>
-                  <el-icon v-else size="20"><CircleClose /></el-icon>
+
+          <div v-loading="lifecycleLoading" class="timeline-body">
+            <el-alert
+              v-if="lifecycleError"
+              class="state-alert"
+              type="error"
+              :closable="false"
+              show-icon
+              title="生命周期数据加载失败"
+              :description="lifecycleError"
+            >
+              <el-button type="primary" size="small" :loading="lifecycleLoading" @click="reloadLifecycle">重试</el-button>
+            </el-alert>
+
+            <el-empty v-else-if="!lifecycleLoading && lifecycleStages.length === 0" description="该井暂无生命周期阶段数据" />
+
+            <div v-else-if="lifecycleStages.length > 0" class="timeline-container">
+              <div class="timeline-track">
+                <div class="timeline-progress" :style="{ width: `${progressPercentage}%` }"></div>
+                <div
+                  v-for="(stage, index) in lifecycleStages"
+                  :key="stage.id"
+                  class="timeline-node"
+                  :class="{
+                    active: stage.status === 'completed',
+                    current: stage.status === 'in_progress',
+                    selected: selectedStageId === stage.id
+                  }"
+                  @click="selectStage(stage.id)"
+                >
+                  <div class="node-icon">
+                    <el-icon v-if="stage.status === 'completed'" size="20"><CircleCheck /></el-icon>
+                    <el-icon v-else-if="stage.status === 'in_progress'" size="20"><Loading /></el-icon>
+                    <el-icon v-else size="20"><Clock /></el-icon>
+                  </div>
+                  <div class="node-content">
+                    <div class="node-name">{{ stage.name }}</div>
+                    <div class="node-date">{{ stage.startDate }} ~ {{ stage.endDate || '进行中' }}</div>
+                    <div class="node-progress">完成度 {{ stage.progress }}%</div>
+                  </div>
+                  <div class="node-line" v-if="index < lifecycleStages.length - 1"></div>
                 </div>
-                <div class="node-content">
-                  <div class="node-name">{{ stage.name }}</div>
-                  <div class="node-date">{{ stage.startDate }} ~ {{ stage.endDate || '进行中' }}</div>
-                </div>
-                <div class="node-line" v-if="index < lifecycleStages.length - 1"></div>
               </div>
             </div>
           </div>
@@ -54,99 +82,167 @@
           <template #header>
             <span>阶段详情</span>
           </template>
-          <div class="stage-nav">
-            <div v-for="stage in lifecycleStages" :key="stage.id" class="stage-item" :class="{ active: selectedStage?.id === stage.id }" @click="selectStage(stage)">
-              <div class="stage-indicator" :class="stage.status"></div>
-              <div class="stage-info">
-                <div class="stage-name">{{ stage.name }}</div>
-                <div class="stage-duration">持续: {{ getStageDuration(stage) }}</div>
+          <div v-loading="lifecycleLoading" class="stage-nav">
+            <el-alert
+              v-if="lifecycleError"
+              class="state-alert"
+              type="error"
+              :closable="false"
+              show-icon
+              title="阶段列表加载失败"
+              :description="lifecycleError"
+            >
+              <el-button type="primary" size="small" :loading="lifecycleLoading" @click="reloadLifecycle">重试</el-button>
+            </el-alert>
+            <el-empty v-else-if="!lifecycleLoading && lifecycleStages.length === 0" description="暂无阶段" :image-size="80" />
+            <template v-else>
+              <div
+                v-for="stage in lifecycleStages"
+                :key="stage.id"
+                class="stage-item"
+                :class="{ active: selectedStageId === stage.id }"
+                @click="selectStage(stage.id)"
+              >
+                <div class="stage-indicator" :class="stage.status"></div>
+                <div class="stage-info">
+                  <div class="stage-name">{{ stage.name }}</div>
+                  <div class="stage-duration">持续: {{ getStageDuration(stage) }}</div>
+                </div>
+                <el-icon class="stage-arrow"><ArrowRight /></el-icon>
               </div>
-              <el-icon class="stage-arrow"><ArrowRight /></el-icon>
-            </div>
+            </template>
           </div>
         </el-card>
       </el-col>
       <el-col :span="18">
-        <el-card v-if="selectedStage" class="stage-detail-card">
-          <template #header>
+        <el-card class="stage-detail-card">
+          <template #header v-if="selectedStageSummary">
             <div class="card-header">
-              <span>{{ selectedStage.name }} - 详细信息</span>
-              <el-tag :type="getStageStatusType(selectedStage.status)">{{ getStageStatusText(selectedStage.status) }}</el-tag>
+              <span>{{ selectedStageSummary.name }} - 详细信息</span>
+              <el-tag :type="getStageStatusType(selectedStageSummary.status)">
+                {{ getStageStatusText(selectedStageSummary.status) }}
+              </el-tag>
             </div>
           </template>
-          
-          <el-row :gutter="20" class="mb-20">
-            <el-col :span="12">
-              <div class="info-group">
-                <div class="info-label">开始时间</div>
-                <div class="info-value">{{ selectedStage.startDate }}</div>
-              </div>
-            </el-col>
-            <el-col :span="12">
-              <div class="info-group">
-                <div class="info-label">结束时间</div>
-                <div class="info-value">{{ selectedStage.endDate || '-' }}</div>
-              </div>
-            </el-col>
-            <el-col :span="12">
-              <div class="info-group">
-                <div class="info-label">负责人</div>
-                <div class="info-value">{{ selectedStage.manager || '-' }}</div>
-              </div>
-            </el-col>
-            <el-col :span="12">
-              <div class="info-group">
-                <div class="info-label">完成度</div>
-                <div class="info-value">
-                  <el-progress :percentage="selectedStage.progress" :status="selectedStage.progress === 100 ? 'success' : ''" />
-                </div>
-              </div>
-            </el-col>
-          </el-row>
 
-          <el-tabs v-model="activeTab">
-            <el-tab-pane label="关键指标" name="metrics">
-              <el-row :gutter="20">
-                <el-col :span="8" v-for="metric in selectedStage.metrics" :key="metric.name">
-                  <div class="metric-card">
-                    <div class="metric-icon" :style="{ background: metric.color }">
-                      <el-icon><component :is="metric.icon" /></el-icon>
+          <div v-if="lifecycleLoading" v-loading="true" class="detail-loading"></div>
+
+          <el-empty v-else-if="!selectedStageId" description="请选择左侧阶段查看详情" />
+
+          <div v-else-if="lifecycleError" v-loading="lifecycleLoading" class="detail-state">
+            <el-alert
+              type="error"
+              :closable="false"
+              show-icon
+              title="阶段详情暂不可用"
+              description="当前井的生命周期数据加载失败，请先重试恢复阶段列表"
+            >
+              <el-button type="primary" size="small" :loading="lifecycleLoading" @click="reloadLifecycle">重试</el-button>
+            </el-alert>
+          </div>
+
+          <el-empty v-else-if="!selectedStageSummary && !detailLoading && !detailError" description="未找到该阶段信息" />
+
+          <div v-else-if="detailError" v-loading="detailLoading" class="detail-state">
+            <el-alert
+              type="error"
+              :closable="false"
+              show-icon
+              title="阶段详情加载失败"
+              :description="detailError"
+            >
+              <el-button type="primary" size="small" :loading="detailLoading" @click="retryLoadDetail">重试</el-button>
+            </el-alert>
+          </div>
+
+          <template v-else>
+            <div v-loading="detailLoading">
+              <template v-if="stageDetail">
+                <el-row :gutter="20" class="mb-20">
+                  <el-col :span="12">
+                    <div class="info-group">
+                      <div class="info-label">开始时间</div>
+                      <div class="info-value">{{ stageDetail.startDate || '-' }}</div>
                     </div>
-                    <div class="metric-content">
-                      <div class="metric-value">{{ metric.value }}</div>
-                      <div class="metric-name">{{ metric.name }}</div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="info-group">
+                      <div class="info-label">结束时间</div>
+                      <div class="info-value">{{ stageDetail.endDate || '-' }}</div>
                     </div>
-                  </div>
-                </el-col>
-              </el-row>
-            </el-tab-pane>
-            <el-tab-pane label="数据趋势" name="trend">
-              <div ref="trendChart" class="chart-container"></div>
-            </el-tab-pane>
-            <el-tab-pane label="关键事件" name="events">
-              <el-timeline>
-                <el-timeline-item v-for="event in selectedStage.events" :key="event.id" :timestamp="event.time" :type="event.type" :color="event.color">
-                  <el-card>
-                    <h4>{{ event.title }}</h4>
-                    <p>{{ event.description }}</p>
-                  </el-card>
-                </el-timeline-item>
-              </el-timeline>
-            </el-tab-pane>
-            <el-tab-pane label="文档资料" name="docs">
-              <el-table :data="selectedStage.documents" style="width: 100%">
-                <el-table-column prop="name" label="文档名称" />
-                <el-table-column prop="type" label="类型" width="120" />
-                <el-table-column prop="size" label="大小" width="120" />
-                <el-table-column prop="uploadTime" label="上传时间" width="180" />
-                <el-table-column label="操作" width="120">
-                  <template #default>
-                    <el-button type="primary" size="small" link>下载</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
-          </el-tabs>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="info-group">
+                      <div class="info-label">负责人</div>
+                      <div class="info-value">{{ stageDetail.manager || '-' }}</div>
+                    </div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="info-group">
+                      <div class="info-label">完成度</div>
+                      <div class="info-value">
+                        <el-progress :percentage="stageDetail.progress ?? 0" :status="stageDetail.progress === 100 ? 'success' : ''" />
+                      </div>
+                    </div>
+                  </el-col>
+                </el-row>
+
+                <el-tabs v-model="activeTab">
+                  <el-tab-pane label="关键指标" name="metrics">
+                    <el-empty v-if="metricsList.length === 0" description="暂无指标数据" :image-size="100" />
+                    <el-row v-else :gutter="20">
+                      <el-col :span="8" v-for="metric in metricsList" :key="metric.name">
+                        <div class="metric-card">
+                          <div class="metric-icon" :style="{ background: metric.color }">
+                            <el-icon><component :is="metric.icon" /></el-icon>
+                          </div>
+                          <div class="metric-content">
+                            <div class="metric-value">{{ metric.value }}</div>
+                            <div class="metric-name">{{ metric.name }}</div>
+                          </div>
+                        </div>
+                      </el-col>
+                    </el-row>
+                  </el-tab-pane>
+                  <el-tab-pane label="数据趋势" name="trend">
+                    <el-empty v-if="!hasTrendData" description="该阶段暂无趋势数据" :image-size="100" />
+                    <div v-show="hasTrendData" ref="trendChart" class="chart-container"></div>
+                  </el-tab-pane>
+                  <el-tab-pane label="关键事件" name="events">
+                    <el-empty v-if="eventList.length === 0" description="暂无事件记录" :image-size="100" />
+                    <el-timeline v-else>
+                      <el-timeline-item
+                        v-for="event in eventList"
+                        :key="event.id"
+                        :timestamp="event.time"
+                        :type="event.type"
+                        :color="event.color"
+                      >
+                        <el-card>
+                          <h4>{{ event.title }}</h4>
+                          <p>{{ event.description }}</p>
+                        </el-card>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </el-tab-pane>
+                  <el-tab-pane label="文档资料" name="docs">
+                    <el-empty v-if="documentList.length === 0" description="暂无文档资料" :image-size="100" />
+                    <el-table v-else :data="documentList" style="width: 100%">
+                      <el-table-column prop="name" label="文档名称" />
+                      <el-table-column prop="type" label="类型" width="120" />
+                      <el-table-column prop="size" label="大小" width="120" />
+                      <el-table-column prop="uploadTime" label="上传时间" width="180" />
+                      <el-table-column label="操作" width="120">
+                        <template #default>
+                          <el-button type="primary" size="small" link>下载</el-button>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </el-tab-pane>
+                </el-tabs>
+              </template>
+            </div>
+          </template>
         </el-card>
       </el-col>
     </el-row>
@@ -157,16 +253,25 @@
           <template #header>
             <div class="card-header">
               <span>各阶段对比分析</span>
+              <el-button v-if="lifecycleError" text type="primary" :loading="lifecycleLoading" @click="reloadLifecycle">
+                重试
+              </el-button>
             </div>
           </template>
-          <el-row :gutter="20">
-            <el-col :span="12">
-              <div ref="durationChart" class="chart-container"></div>
-            </el-col>
-            <el-col :span="12">
-              <div ref="costChart" class="chart-container"></div>
-            </el-col>
-          </el-row>
+          <div v-loading="lifecycleLoading">
+            <el-empty
+              v-if="!lifecycleLoading && lifecycleStages.length === 0"
+              description="该井暂无可对比的阶段数据"
+            />
+            <el-row v-else :gutter="20">
+              <el-col :span="12">
+                <div ref="durationChart" class="chart-container"></div>
+              </el-col>
+              <el-col :span="12">
+                <div ref="costChart" class="chart-container"></div>
+              </el-col>
+            </el-row>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -174,10 +279,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
-import { getWellList } from '@/api/well'
-import { getWellLifecycle } from '@/api/lifecycle'
+import { getWellLifecycle, getStageDetail } from '@/api/lifecycle'
+import type {
+  StageSummary,
+  StageDetail,
+  LifecycleComparison
+} from '@/api/lifecycle'
 
 interface Well {
   id: number
@@ -187,324 +296,348 @@ interface Well {
   status: string
 }
 
-interface Stage {
-  id: string
-  name: string
-  status: string
-  startDate: string
-  endDate?: string
-  manager?: string
-  progress: number
-  duration?: number
-  metrics?: Array<{ name: string; value: string; icon: string; color: string }>
-  events?: Array<{ id: string; title: string; description: string; time: string; type: string; color: string }>
-  documents?: Array<{ name: string; type: string; size: string; uploadTime: string }>
+// 从可能的接口返回结构中安全取数，兼容 { data } / 直接返回数组 等形式
+const unwrap = <T,>(payload: any, fallback: T): T => {
+  if (payload === null || payload === undefined) return fallback
+  if (Array.isArray(fallback)) {
+    return (Array.isArray(payload) ? payload : payload.list ?? payload.rows ?? payload.records ?? fallback) as T
+  }
+  return payload
+}
+
+const STORAGE_KEY = 'lifecycle:selected'
+
+interface PersistedSelection {
+  wellId: number
+  // 每口井上次选中的阶段，避免切换后把上一口井的选择带到新井
+  stageIds: Record<number, string>
+}
+
+const readPersisted = (): PersistedSelection | null => {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as PersistedSelection) : null
+  } catch {
+    return null
+  }
+}
+
+const persistSelection = () => {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      wellId: selectedWellId.value,
+      stageIds: preferredStageIds.value
+    }))
+  } catch {
+    // sessionStorage 不可用时忽略，不影响页面功能
+  }
 }
 
 const wellList = ref<Well[]>([])
 const selectedWellId = ref<number | null>(null)
 const selectedWell = ref<Well | null>(null)
-const lifecycleStages = ref<Stage[]>([])
-const selectedStage = ref<Stage | null>(null)
+
+const lifecycleStages = ref<StageSummary[]>([])
+const comparison = ref<LifecycleComparison | null>(null)
+
+const selectedStageId = ref<string | null>(null)
+// 仅保存阶段 id，时间线/阶段列表/详情面板都从当前井的阶段数据派生，保证三者同步
+const preferredStageIds = ref<Record<number, string>>({})
 const activeTab = ref('metrics')
 
-const trendChart = ref<HTMLElement>()
-const durationChart = ref<HTMLElement>()
-const costChart = ref<HTMLElement>()
+const lifecycleLoading = ref(false)
+const lifecycleError = ref('')
 
-const currentStage = computed(() => {
-  return lifecycleStages.value.find(s => s.status === 'in_progress')
+// 阶段详情按 “井 + 阶段” 缓存，返回该井时可同步恢复，且绝不与其他井串数据
+const detailCache = ref<Record<string, StageDetail>>({})
+const detailLoading = ref(false)
+const detailError = ref('')
+// 当前详情请求归属的 “井+阶段”，用于丢弃过期井/过期阶段的响应
+const detailRequestKey = ref('')
+
+let lifecycleSeq = 0
+let detailSeq = 0
+
+const trendChartEl = ref<HTMLElement>()
+const durationChartEl = ref<HTMLElement>()
+const costChartEl = ref<HTMLElement>()
+let trendChart: echarts.ECharts | null = null
+let durationChart: echarts.ECharts | null = null
+let costChart: echarts.ECharts | null = null
+
+const selectedStageSummary = computed(() =>
+  selectedStageId.value
+    ? lifecycleStages.value.find(s => s.id === selectedStageId.value) ?? null
+    : null
+)
+
+const stageDetail = computed(() =>
+  selectedWellId.value !== null && selectedStageId.value
+    ? detailCache.value[`${selectedWellId.value}:${selectedStageId.value}`] ?? null
+    : null
+)
+
+const metricsList = computed(() => stageDetail.value?.metrics ?? [])
+const eventList = computed(() => stageDetail.value?.events ?? [])
+const documentList = computed(() => stageDetail.value?.documents ?? [])
+const hasTrendData = computed(() => {
+  const t = stageDetail.value?.trend
+  return !!t && Array.isArray(t.xData) && t.xData.length > 0
 })
 
+const currentStage = computed(() => lifecycleStages.value.find(s => s.status === 'in_progress'))
+
 const progressPercentage = computed(() => {
-  const completed = lifecycleStages.value.filter(s => s.status === 'completed').length
   const total = lifecycleStages.value.length
+  if (total === 0) return 0
+  const completed = lifecycleStages.value.filter(s => s.status === 'completed').length
   return Math.round((completed / total) * 100)
 })
 
 const getStatusType = (status: string) => {
-  const map: Record<string, any> = {
-    '生产中': 'success',
-    '钻井中': 'primary',
-    '待修井': 'warning',
-    '关停井': 'danger'
+  const map: Record<string, string> = {
+    生产中: 'success',
+    钻井中: 'primary',
+    待修井: 'warning',
+    关停井: 'danger'
   }
   return map[status] || 'info'
 }
 
 const getStageStatusType = (status: string) => {
-  const map: Record<string, any> = {
-    'completed': 'success',
-    'in_progress': 'primary',
-    'pending': 'info'
+  const map: Record<string, string> = {
+    completed: 'success',
+    in_progress: 'primary',
+    pending: 'info'
   }
   return map[status] || 'info'
 }
 
 const getStageStatusText = (status: string) => {
   const map: Record<string, string> = {
-    'completed': '已完成',
-    'in_progress': '进行中',
-    'pending': '待开始'
+    completed: '已完成',
+    in_progress: '进行中',
+    pending: '待开始'
   }
   return map[status] || status
 }
 
-const getStageDuration = (stage: Stage) => {
+const getStageDuration = (stage: StageSummary) => {
   if (!stage.endDate) return '进行中'
+  if (typeof stage.durationDays === 'number') return `${stage.durationDays} 天`
   const start = new Date(stage.startDate)
   const end = new Date(stage.endDate)
   const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-  return `${days} 天`
+  return Number.isNaN(days) ? '-' : `${days} 天`
 }
 
-const handleWellChange = async () => {
-  if (selectedWellId.value) {
-    selectedWell.value = wellList.value.find(w => w.id === selectedWellId.value) || null
-    await loadLifecycleData()
-  }
+const clearCharts = () => {
+  trendChart?.dispose()
+  durationChart?.dispose()
+  costChart?.dispose()
+  trendChart = null
+  durationChart = null
+  costChart = null
 }
 
-const selectStage = (stage: Stage) => {
-  selectedStage.value = stage
+// 切换井 / 加载失败 / 空数据时清理上一口井残留的全部内容
+const resetLifecycleView = () => {
+  lifecycleStages.value = []
+  comparison.value = null
+  selectedStageId.value = null
+  detailLoading.value = false
+  detailError.value = ''
+  detailRequestKey.value = ''
   activeTab.value = 'metrics'
-  setTimeout(() => initTrendChart(), 100)
+  clearCharts()
 }
 
-const loadWellList = async () => {
-  wellList.value = [
-    { id: 1, wellCode: 'A-001', wellName: 'A-01井', blockName: '胜利油田', status: '生产中' },
-    { id: 2, wellCode: 'B-003', wellName: 'B-03井', blockName: '胜利油田', status: '钻井中' },
-    { id: 3, wellCode: 'C-002', wellName: 'C-02井', blockName: '胜利油田', status: '生产中' }
-  ]
-  selectedWellId.value = 1
-  selectedWell.value = wellList.value[0]
-}
-
-const loadLifecycleData = async () => {
-  lifecycleStages.value = [
-    {
-      id: 'exploration',
-      name: '勘探规划',
-      status: 'completed',
-      startDate: '2023-01-15',
-      endDate: '2023-03-20',
-      manager: '张工程师',
-      progress: 100,
-      metrics: [
-        { name: '物探面积', value: '150 km²', icon: 'Compass', color: '#3b82f6' },
-        { name: '预测储量', value: '500 万吨', icon: 'DataLine', color: '#8b5cf6' },
-        { name: '探井数量', value: '5 口', icon: 'Position', color: '#22c55e' }
-      ],
-      events: [
-        { id: 'e1', title: '三维地震勘探启动', description: '完成三维地震数据采集工作', time: '2023-01-20', type: 'primary', color: '#3b82f6' },
-        { id: 'e2', title: '储量评估完成', description: '完成石油储量评估报告', time: '2023-02-28', type: 'success', color: '#22c55e' },
-        { id: 'e3', title: '井位设计评审通过', description: '井位设计方案通过专家评审', time: '2023-03-15', type: 'success', color: '#22c55e' }
-      ],
-      documents: [
-        { name: '三维地震勘探报告.pdf', type: 'PDF', size: '15.2 MB', uploadTime: '2023-02-15' },
-        { name: '储量评估报告.docx', type: 'Word', size: '8.5 MB', uploadTime: '2023-03-01' },
-        { name: '井位设计图纸.dwg', type: 'CAD', size: '3.2 MB', uploadTime: '2023-03-18' }
-      ]
-    },
-    {
-      id: 'drilling',
-      name: '钻井施工',
-      status: 'completed',
-      startDate: '2023-04-01',
-      endDate: '2023-07-15',
-      manager: '李工程师',
-      progress: 100,
-      metrics: [
-        { name: '钻井深度', value: '3,500 m', icon: 'TrendCharts', color: '#f59e0b' },
-        { name: '钻井周期', value: '105 天', icon: 'Clock', color: '#ef4444' },
-        { name: '机械钻速', value: '8.5 m/h', icon: 'Odometer', color: '#06b6d4' }
-      ],
-      events: [
-        { id: 'd1', title: '开钻典礼', description: '正式开始钻井作业', time: '2023-04-01', type: 'primary', color: '#3b82f6' },
-        { id: 'd2', title: '二开完成', description: '完成第二开钻井作业', time: '2023-05-10', type: 'success', color: '#22c55e' },
-        { id: 'd3', title: '完钻井深达到设计', description: '顺利钻达设计井深3500米', time: '2023-07-10', type: 'success', color: '#22c55e' }
-      ],
-      documents: [
-        { name: '钻井工程设计.pdf', type: 'PDF', size: '12.8 MB', uploadTime: '2023-03-25' },
-        { name: '钻井日报汇总.xlsx', type: 'Excel', size: '4.2 MB', uploadTime: '2023-07-16' },
-        { name: '完井报告.pdf', type: 'PDF', size: '18.5 MB', uploadTime: '2023-07-20' }
-      ]
-    },
-    {
-      id: 'completion',
-      name: '完井测试',
-      status: 'completed',
-      startDate: '2023-07-20',
-      endDate: '2023-09-10',
-      manager: '王工程师',
-      progress: 100,
-      metrics: [
-        { name: '测试层数', value: '8 层', icon: 'CopyDocument', color: '#3b82f6' },
-        { name: '日产油量', value: '120 吨', icon: 'TrendCharts', color: '#22c55e' },
-        { name: '地层压力', value: '35.2 MPa', icon: 'DataAnalysis', color: '#8b5cf6' }
-      ],
-      events: [
-        { id: 'c1', title: '固井作业完成', description: '完成油层套管固井作业', time: '2023-07-25', type: 'success', color: '#22c55e' },
-        { id: 'c2', title: '射孔作业完成', description: '成功射开目的层段', time: '2023-08-05', type: 'success', color: '#22c55e' },
-        { id: 'c3', title: '试油成果达标', description: '试油产量达到预期目标', time: '2023-09-05', type: 'success', color: '#22c55e' }
-      ],
-      documents: [
-        { name: '完井测试方案.pdf', type: 'PDF', size: '6.3 MB', uploadTime: '2023-07-18' },
-        { name: '试油成果报告.pdf', type: 'PDF', size: '9.8 MB', uploadTime: '2023-09-12' }
-      ]
-    },
-    {
-      id: 'production',
-      name: '生产运营',
-      status: 'in_progress',
-      startDate: '2023-09-15',
-      manager: '赵工程师',
-      progress: 45,
-      metrics: [
-        { name: '累计产油', value: '15,680 吨', icon: 'TrendCharts', color: '#22c55e' },
-        { name: '累计产气', value: '850 万方', icon: 'Wind', color: '#f59e0b' },
-        { name: '生产时率', value: '98.5%', icon: 'Clock', color: '#3b82f6' }
-      ],
-      events: [
-        { id: 'p1', title: '投产成功', description: '正式投入生产运营', time: '2023-09-15', type: 'primary', color: '#3b82f6' },
-        { id: 'p2', title: '首次措施作业', description: '完成首次压裂增产措施', time: '2024-01-20', type: 'warning', color: '#f59e0b' },
-        { id: 'p3', title: '产量稳产达标', description: '连续3个月产量稳定', time: '2024-03-01', type: 'success', color: '#22c55e' }
-      ],
-      documents: [
-        { name: '生产运行日报.xlsx', type: 'Excel', size: '2.5 MB', uploadTime: '2024-05-10' },
-        { name: '油井工况分析报告.pdf', type: 'PDF', size: '5.8 MB', uploadTime: '2024-04-15' }
-      ]
-    },
-    {
-      id: 'maintenance',
-      name: '修井作业',
-      status: 'pending',
-      startDate: '2026-06-01',
-      manager: '待分配',
-      progress: 0,
-      metrics: [
-        { name: '计划作业次数', value: '3 次', icon: 'Tools', color: '#64748b' },
-        { name: '预计周期', value: '15 天', icon: 'Clock', color: '#64748b' },
-        { name: '预算费用', value: '500 万', icon: 'Money', color: '#64748b' }
-      ],
-      events: [],
-      documents: []
-    },
-    {
-      id: 'abandonment',
-      name: '废弃处置',
-      status: 'pending',
-      startDate: '2033-01-01',
-      manager: '待分配',
-      progress: 0,
-      metrics: [
-        { name: '预计年限', value: '10 年', icon: 'Clock', color: '#64748b' },
-        { name: '环保等级', value: '一级', icon: 'Warning', color: '#64748b' },
-        { name: '残值回收', value: '80%', icon: 'Coin', color: '#64748b' }
-      ],
-      events: [],
-      documents: []
-    }
-  ]
-  
-  selectedStage.value = lifecycleStages.value[3]
-  initCharts()
-}
-
-const initTrendChart = () => {
-  if (!trendChart.value || !selectedStage.value) return
-  
-  const chart = echarts.init(trendChart.value)
-  
-  const chartData: any = {
-    exploration: {
-      xData: ['1月', '2月', '3月'],
-      series: [
-        { name: '地震覆盖面积', data: [50, 120, 150], color: '#3b82f6' },
-        { name: '发现圈闭', data: [2, 5, 8], color: '#8b5cf6' }
-      ]
-    },
-    drilling: {
-      xData: ['4月', '5月', '6月', '7月'],
-      series: [
-        { name: '钻井进尺', data: [800, 1800, 2800, 3500], color: '#f59e0b' },
-        { name: '机械钻速', data: [7.2, 8.5, 9.1, 8.8], color: '#ef4444' }
-      ]
-    },
-    completion: {
-      xData: ['7月下旬', '8月', '9月上旬'],
-      series: [
-        { name: '测试层数', data: [2, 5, 8], color: '#3b82f6' },
-        { name: '单层产量', data: [8, 15, 15], color: '#22c55e' }
-      ]
-    },
-    production: {
-      xData: ['9月', '10月', '11月', '12月', '1月', '2月', '3月', '4月', '5月'],
-      series: [
-        { name: '日产油量', data: [115, 118, 122, 120, 118, 125, 122, 120, 118], color: '#22c55e' },
-        { name: '日产水量', data: [45, 48, 52, 50, 48, 45, 42, 40, 38], color: '#06b6d4' }
-      ]
-    }
+const pickStageAfterLoad = (wellId: number, preferredId?: string) => {
+  if (lifecycleStages.value.length === 0) {
+    selectedStageId.value = null
+    return
   }
-  
-  const data = chartData[selectedStage.value.id] || chartData.production
-  
-  chart.setOption({
+  const target =
+    (preferredId && lifecycleStages.value.find(s => s.id === preferredId)) ||
+    lifecycleStages.value.find(s => s.status === 'in_progress') ||
+    lifecycleStages.value[lifecycleStages.value.length - 1]
+  selectedStageId.value = target.id
+  preferredStageIds.value[wellId] = target.id
+  persistSelection()
+  loadStageDetail(wellId, target.id)
+}
+
+const loadLifecycle = async (wellId: number, preferredStageId?: string) => {
+  const seq = ++lifecycleSeq
+  lifecycleLoading.value = true
+  lifecycleError.value = ''
+  // 先清掉旧井内容，避免新数据到达前时间线/列表仍展示旧井阶段
+  resetLifecycleView()
+
+  try {
+    const res = await getWellLifecycle(wellId)
+    if (seq !== lifecycleSeq) return // 已切换到其他井，丢弃过期响应
+    const payload = unwrap<any>(res.data, { stages: [] })
+    const stages = (Array.isArray(payload) ? payload : payload.stages ?? []) as StageSummary[]
+    lifecycleStages.value = Array.isArray(stages) ? stages : []
+    comparison.value = (payload.comparison as LifecycleComparison) ?? null
+
+    pickStageAfterLoad(wellId, preferredStageId)
+    await nextTick()
+    renderComparisonCharts()
+  } catch (e: any) {
+    if (seq !== lifecycleSeq) return
+    // 失败时清空旧井内容，但保留 selectedWellId/各井选择偏好，便于重试后恢复
+    lifecycleStages.value = []
+    comparison.value = null
+    lifecycleError.value = e?.message || '加载失败，请稍后重试'
+    if (preferredStageId) selectedStageId.value = preferredStageId
+    clearCharts()
+  } finally {
+    if (seq === lifecycleSeq) lifecycleLoading.value = false
+  }
+}
+
+const loadStageDetail = async (wellId: number, stageId: string) => {
+  const seq = ++detailSeq
+  const key = `${wellId}:${stageId}`
+  detailRequestKey.value = key
+  detailError.value = ''
+
+  if (detailCache.value[key]) {
+    detailLoading.value = false
+    return
+  }
+
+  detailLoading.value = true
+  try {
+    const res = await getStageDetail(wellId, stageId)
+    if (seq !== detailSeq || detailRequestKey.value !== key) return
+    const detail = unwrap<StageDetail>(res.data, {} as StageDetail)
+    // 防御：详情必须属于当前井当前阶段，防止异常后端返回串井数据
+    if (detail && (!detail.id || detail.id !== stageId)) detail.id = stageId
+    detailCache.value = { ...detailCache.value, [key]: detail }
+  } catch (e: any) {
+    if (seq !== detailSeq || detailRequestKey.value !== key) return
+    detailError.value = e?.message || '详情加载失败，请稍后重试'
+  } finally {
+    if (seq === detailSeq && detailRequestKey.value === key) detailLoading.value = false
+  }
+}
+
+const handleWellChange = () => {
+  if (selectedWellId.value === null) {
+    selectedWell.value = null
+    resetLifecycleView()
+    return
+  }
+  selectedWell.value = wellList.value.find(w => w.id === selectedWellId.value) || null
+  persistSelection()
+  loadLifecycle(selectedWellId.value, preferredStageIds.value[selectedWellId.value])
+}
+
+const selectStage = (stageId: string) => {
+  if (selectedWellId.value === null) return
+  selectedStageId.value = stageId
+  preferredStageIds.value[selectedWellId.value] = stageId
+  detailError.value = ''
+  activeTab.value = 'metrics'
+  persistSelection()
+  loadStageDetail(selectedWellId.value, stageId)
+  // 切阶段后等 DOM 更新，确保趋势图在当前井当前阶段数据上重绘
+  nextTick(() => renderTrendChart())
+}
+
+const reloadLifecycle = () => {
+  if (selectedWellId.value === null) return
+  const preferred = preferredStageIds.value[selectedWellId.value]
+  loadLifecycle(selectedWellId.value, preferred)
+}
+
+const retryLoadDetail = () => {
+  if (selectedWellId.value === null || !selectedStageId.value) return
+  loadStageDetail(selectedWellId.value, selectedStageId.value)
+}
+
+const renderTrendChart = () => {
+  if (!trendChartEl.value) return
+  if (!hasTrendData.value) {
+    trendChart?.dispose()
+    trendChart = null
+    return
+  }
+  if (!trendChart) trendChart = echarts.init(trendChartEl.value)
+  const trend = stageDetail.value?.trend
+  if (!trend) return
+  trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: data.series.map((s: any) => s.name) },
+    legend: { data: trend.series.map(s => s.name) },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', boundaryGap: false, data: data.xData },
+    xAxis: { type: 'category', boundaryGap: false, data: trend.xData },
     yAxis: { type: 'value' },
-    series: data.series.map((s: any) => ({
+    series: trend.series.map(s => ({
       name: s.name,
       type: 'line',
       smooth: true,
       data: s.data,
-      itemStyle: { color: s.color }
+      itemStyle: s.color ? { color: s.color } : undefined
     }))
-  })
-  
-  window.addEventListener('resize', () => chart.resize())
+  }, true)
 }
 
-const initDurationChart = () => {
-  if (!durationChart.value) return
-  
-  const chart = echarts.init(durationChart.value)
-  
-  chart.setOption({
+const renderDurationChart = () => {
+  if (!durationChartEl.value || lifecycleStages.value.length === 0) return
+  if (!durationChart) durationChart = echarts.init(durationChartEl.value)
+
+  let names: string[] = []
+  let days: Array<number | null> = []
+  if (comparison.value?.duration?.length) {
+    names = comparison.value.duration.map(d => d.name)
+    days = comparison.value.duration.map(d => d.days)
+  } else {
+    names = lifecycleStages.value.map(s => s.name)
+    days = lifecycleStages.value.map(s => {
+      if (typeof s.durationDays === 'number') return s.durationDays
+      if (!s.endDate) return null
+      const start = new Date(s.startDate)
+      const end = new Date(s.endDate)
+      const d = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+      return Number.isNaN(d) ? null : d
+    })
+  }
+
+  durationChart.setOption({
     title: { text: '各阶段周期对比', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', data: lifecycleStages.value.map(s => s.name), axisLabel: { rotate: 30 } },
+    xAxis: { type: 'category', data: names, axisLabel: { rotate: 30 } },
     yAxis: { type: 'value', name: '天数' },
     series: [{
       type: 'bar',
-      data: lifecycleStages.value.map(s => {
-        if (!s.endDate) return 80
-        const start = new Date(s.startDate)
-        const end = new Date(s.endDate)
-        return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-      }),
+      data: days,
       itemStyle: {
-        color: (params: any) => {
+        color: (params: { dataIndex: number }) => {
           const colors = ['#3b82f6', '#8b5cf6', '#f59e0b', '#22c55e', '#06b6d4', '#64748b']
-          return colors[params.dataIndex]
+          return colors[params.dataIndex % colors.length]
         }
       }
     }]
-  })
-  
-  window.addEventListener('resize', () => chart.resize())
+  }, true)
 }
 
-const initCostChart = () => {
-  if (!costChart.value) return
-  
-  const chart = echarts.init(costChart.value)
-  
-  chart.setOption({
+const renderCostChart = () => {
+  if (!costChartEl.value || lifecycleStages.value.length === 0) return
+  if (!costChart) costChart = echarts.init(costChartEl.value)
+
+  const costData = comparison.value?.cost?.length
+    ? comparison.value.cost
+    : lifecycleStages.value
+        .filter(s => typeof s.cost === 'number')
+        .map(s => ({ name: s.name, value: s.cost as number }))
+
+  const colors = ['#3b82f6', '#8b5cf6', '#f59e0b', '#22c55e', '#06b6d4', '#64748b']
+
+  costChart.setOption({
     title: { text: '各阶段费用占比', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: { trigger: 'item' },
     legend: { orient: 'vertical', left: 'left' },
@@ -518,29 +651,61 @@ const initCostChart = () => {
         label: { show: true, fontSize: 16, fontWeight: 'bold' }
       },
       labelLine: { show: false },
-      data: [
-        { value: 200, name: '勘探规划', itemStyle: { color: '#3b82f6' } },
-        { value: 1200, name: '钻井施工', itemStyle: { color: '#8b5cf6' } },
-        { value: 300, name: '完井测试', itemStyle: { color: '#f59e0b' } },
-        { value: 800, name: '生产运营', itemStyle: { color: '#22c55e' } },
-        { value: 150, name: '修井作业', itemStyle: { color: '#06b6d4' } },
-        { value: 50, name: '废弃处置', itemStyle: { color: '#64748b' } }
-      ]
+      data: costData.map((d, i) => ({
+        ...d,
+        itemStyle: { color: colors[i % colors.length] }
+      }))
     }]
-  })
-  
-  window.addEventListener('resize', () => chart.resize())
+  }, true)
 }
 
-const initCharts = () => {
-  initTrendChart()
-  initDurationChart()
-  initCostChart()
+const renderComparisonCharts = () => {
+  renderDurationChart()
+  renderCostChart()
+}
+
+const handleResize = () => {
+  trendChart?.resize()
+  durationChart?.resize()
+  costChart?.resize()
+}
+
+// 切换到趋势 tab 时图表容器才显示，需要补一次初始化/resize
+watch(activeTab, (tab) => {
+  if (tab === 'trend') nextTick(() => renderTrendChart())
+})
+
+// 阶段详情（含趋势数据）到达后刷新趋势图
+watch(stageDetail, () => {
+  nextTick(() => renderTrendChart())
+})
+
+const loadWellList = () => {
+  wellList.value = [
+    { id: 1, wellCode: 'A-001', wellName: 'A-01井', blockName: '胜利油田', status: '生产中' },
+    { id: 2, wellCode: 'B-003', wellName: 'B-03井', blockName: '胜利油田', status: '钻井中' },
+    { id: 3, wellCode: 'C-002', wellName: 'C-02井', blockName: '胜利油田', status: '生产中' }
+  ]
 }
 
 onMounted(async () => {
-  await loadWellList()
-  await loadLifecycleData()
+  loadWellList()
+  window.addEventListener('resize', handleResize)
+
+  const persisted = readPersisted()
+  const initialWellId = persisted?.wellId && wellList.value.some(w => w.id === persisted.wellId)
+    ? persisted.wellId
+    : wellList.value[0].id
+  if (persisted) preferredStageIds.value = persisted.stageIds || {}
+
+  selectedWellId.value = initialWellId
+  selectedWell.value = wellList.value.find(w => w.id === initialWellId) || null
+  await loadLifecycle(initialWellId, preferredStageIds.value[initialWellId])
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  clearCharts()
 })
 </script>
 
@@ -557,22 +722,22 @@ onMounted(async () => {
   color: #1e293b;
 }
 
+.state-alert {
+  margin-bottom: 12px;
+}
+
 .well-select-card {
   .well-selector {
     display: flex;
     align-items: center;
     gap: 20px;
-    
+
     .well-info {
       display: flex;
       align-items: center;
       gap: 15px;
-      
-      .well-code {
-        color: #64748b;
-        font-size: 14px;
-      }
-      
+
+      .well-code,
       .well-block {
         color: #64748b;
         font-size: 14px;
@@ -582,15 +747,19 @@ onMounted(async () => {
 }
 
 .timeline-card {
+  .timeline-body {
+    min-height: 160px;
+  }
+
   .timeline-container {
     padding: 40px 20px;
-    
+
     .timeline-track {
       position: relative;
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      
+
       .timeline-progress {
         position: absolute;
         top: 19px;
@@ -601,7 +770,7 @@ onMounted(async () => {
         transition: width 0.5s ease;
         z-index: 1;
       }
-      
+
       .timeline-node {
         position: relative;
         flex: 1;
@@ -611,11 +780,19 @@ onMounted(async () => {
         cursor: pointer;
         z-index: 2;
         transition: transform 0.2s;
-        
+
         &:hover {
           transform: scale(1.05);
         }
-        
+
+        &.selected .node-name {
+          color: #3b82f6;
+        }
+
+        &.selected .node-icon {
+          box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25);
+        }
+
         .node-icon {
           width: 44px;
           height: 44px;
@@ -628,42 +805,39 @@ onMounted(async () => {
           border: 3px solid #fff;
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
           transition: all 0.3s;
-          
-          &.active, &.current {
-            background: #22c55e;
-            color: #fff;
-          }
-          
-          &.current {
-            background: #3b82f6;
-            animation: pulse 2s infinite;
-          }
         }
-        
+
         &.active .node-icon {
           background: #22c55e;
           color: #fff;
         }
-        
+
         &.current .node-icon {
           background: #3b82f6;
           color: #fff;
+          animation: pulse 2s infinite;
         }
-        
+
         .node-content {
           margin-top: 12px;
           text-align: center;
-          
+
           .node-name {
             font-size: 14px;
             font-weight: 600;
             color: #334155;
             margin-bottom: 4px;
           }
-          
+
           .node-date {
             font-size: 12px;
             color: #64748b;
+          }
+
+          .node-progress {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 2px;
           }
         }
       }
@@ -678,8 +852,10 @@ onMounted(async () => {
 
 .stage-list-card {
   height: 100%;
-  
+
   .stage-nav {
+    min-height: 200px;
+
     .stage-item {
       display: flex;
       align-items: center;
@@ -689,57 +865,57 @@ onMounted(async () => {
       cursor: pointer;
       transition: all 0.2s;
       margin-bottom: 8px;
-      
+
       &:hover {
         background: #f1f5f9;
       }
-      
+
       &.active {
         background: #eff6ff;
-        
+
         .stage-name {
           color: #3b82f6;
         }
-        
+
         .stage-arrow {
           color: #3b82f6;
         }
       }
-      
+
       .stage-indicator {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        
+
         &.completed {
           background: #22c55e;
         }
-        
+
         &.in_progress {
           background: #3b82f6;
         }
-        
+
         &.pending {
           background: #94a3b8;
         }
       }
-      
+
       .stage-info {
         flex: 1;
-        
+
         .stage-name {
           font-size: 14px;
           font-weight: 500;
           color: #334155;
           margin-bottom: 2px;
         }
-        
+
         .stage-duration {
           font-size: 12px;
           color: #64748b;
         }
       }
-      
+
       .stage-arrow {
         color: #94a3b8;
       }
@@ -748,24 +924,34 @@ onMounted(async () => {
 }
 
 .stage-detail-card {
+  min-height: 420px;
+
+  .detail-state {
+    padding: 40px 0;
+  }
+
+  .detail-loading {
+    min-height: 300px;
+  }
+
   .info-group {
     padding: 16px;
     background: #f8fafc;
     border-radius: 8px;
-    
+
     .info-label {
       font-size: 13px;
       color: #64748b;
       margin-bottom: 6px;
     }
-    
+
     .info-value {
       font-size: 16px;
       font-weight: 500;
       color: #1e293b;
     }
   }
-  
+
   .metric-card {
     display: flex;
     align-items: center;
@@ -774,7 +960,8 @@ onMounted(async () => {
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
-    
+    margin-bottom: 12px;
+
     .metric-icon {
       width: 48px;
       height: 48px;
@@ -785,17 +972,17 @@ onMounted(async () => {
       color: #fff;
       font-size: 22px;
     }
-    
+
     .metric-content {
       flex: 1;
-      
+
       .metric-value {
         font-size: 20px;
         font-weight: 600;
         color: #1e293b;
         margin-bottom: 2px;
       }
-      
+
       .metric-name {
         font-size: 13px;
         color: #64748b;
